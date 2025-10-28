@@ -35,25 +35,42 @@ function buildMinimalDataUri(input: MetadataInput): string {
 
   const sanitize = (s: string | undefined, n: number) => (s || '').slice(0, n)
 
-  // Start with minimal fields to keep URI small
+  // Prefer to include image if possible (without truncating the URL, which would break it)
+  // Strategy: progressively try (name + symbol + image) -> (name + image) -> (name + symbol) -> (name)
+  // While reducing name length until it fits the 200-char limit. As a last resort, return a tiny JSON.
+  const tryEncode = (obj: any) => `${PREFIX}${encodeURIComponent(JSON.stringify(obj))}`
+
   let nameLimit = 32
-  let includeSymbol = true
-
   while (nameLimit > 0) {
-    const base: any = { name: sanitize(input.name, nameLimit) }
-    if (includeSymbol && input.symbol) base.symbol = sanitize(input.symbol, 10)
+    const nameVal = sanitize(input.name, nameLimit)
+    const symbolVal = sanitize(input.symbol, 10)
+    const imageVal = input.image && input.image.trim() ? input.image.trim() : undefined
 
-    const json = JSON.stringify(base)
-    const encoded = encodeURIComponent(json)
-    const uri = `${PREFIX}${encoded}`
-    if (uri.length <= MAX_URI_LEN) return uri
+    if (imageVal) {
+      // Try name + symbol + image
+      const withAll = symbolVal ? { name: nameVal, symbol: symbolVal, image: imageVal } : { name: nameVal, image: imageVal }
+      let uri = tryEncode(withAll)
+      if (uri.length <= MAX_URI_LEN) return uri
 
-    // If too long, first drop symbol, then reduce name progressively
-    if (includeSymbol) {
-      includeSymbol = false
-    } else {
-      nameLimit -= 1
+      // Try name + image (drop symbol)
+      uri = tryEncode({ name: nameVal, image: imageVal })
+      if (uri.length <= MAX_URI_LEN) return uri
     }
+
+    // Try name + symbol (no image)
+    if (symbolVal) {
+      const uri = tryEncode({ name: nameVal, symbol: symbolVal })
+      if (uri.length <= MAX_URI_LEN) return uri
+    }
+
+    // Try name only
+    {
+      const uri = tryEncode({ name: nameVal })
+      if (uri.length <= MAX_URI_LEN) return uri
+    }
+
+    // Reduce name and try again
+    nameLimit -= 1
   }
 
   // As a last resort, return a tiny valid JSON
